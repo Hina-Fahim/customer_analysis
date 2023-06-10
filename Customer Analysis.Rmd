@@ -1,0 +1,210 @@
+```{r}
+library(dplyr)
+library(tidyverse)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+Sample_EU_Superstore <- read_excel("Sample - EU Superstore.xlsx")
+View(Sample_EU_Superstore)
+```
+
+```{r df_eu_storeData}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+df_eu_storeData <- Sample_EU_Superstore
+view(df_eu_storeData)
+```
+# what does each row represent?
+```{r}
+head(df_eu_storeData)
+```
+it seems like a unique combination of order id and product id
+
+## confirming
+```{r}
+df_eu_storeData |> 
+    distinct(`Order ID`, `Product ID`) |> 
+    nrow()
+```
+found 9 rows with duplication
+
+## extracting product id duplicates
+```{r}
+df_eu_storeData |> 
+    group_by(`Order ID`) |> 
+    count(`Product ID`) |> 
+    head(10)
+```
+### another way to do the same
+```{r}
+df_eu_storeData |> 
+    group_by(`Order ID`, `Product ID`) |> 
+    summarise(n = n()) |>
+    head(10)
+```
+## observing duplicate rows
+```{r}
+df_eu_storeData |> 
+    group_by(`Order ID`) |> 
+    count(`Product ID`) |> 
+    arrange(desc(n)) |> 
+    head(10)
+```
+
+```{r}
+df_eu_storeData |> 
+    group_by(`Order ID`) |> 
+    count(`Product ID`) |> 
+    filter(n > 1) |> 
+    inner_join(df_eu_storeData)
+```
+```{r}
+# Convert date columns to date format
+library(lubridate)
+df_eu_storeData$`Order Date` <- ymd(df_eu_storeData$`Order Date`)
+df_eu_storeData$`Ship Date` <- ymd(df_eu_storeData$`Ship Date`) 
+```
+##Calculate necessary metrics
+```{r}
+library(dplyr)
+df_eu_storeData |>
+  group_by(`Customer ID`) |>
+  summarise(date_since_first_visit = as.numeric(as.POSIXct("2019-01-31") - as.POSIXct(min(`Order Date`)), units = "days"), 
+            first_transaction_date = min(`Order Date`),
+            last_transaction_date = max(`Order Date`),
+            total_transactions = n_distinct(`Order ID`),
+            total_revenue = sum(Sales)
+         ) |>
+  mutate(current_date = as.Date("2019-01-31"),
+        days_since_last_transaction = as.numeric(as.POSIXct(current_date) - as.POSIXct(last_transaction_date), units = "days"),median_days_between_orders = median(date_since_first_visit, na.rm = TRUE)) -> df_metric_1
+          
+```
+##Calculate RFM metrics
+```{r}
+library(Hmisc)
+
+df_rfm <- df_metric_1 |>
+  mutate(interval_recency = ntile(days_since_last_transaction, 5),
+         interval_frequency = ntile(total_transactions, 5),
+         interval_monetary = ntile(total_revenue, 5)) |>
+  mutate(R_score = dense_rank(interval_recency),
+         F_score = dense_rank(interval_frequency),
+         M_score = dense_rank(interval_monetary),
+         RFM_score = paste0(R_score, F_score, M_score),
+         RFM_segment = case_when(
+           RFM_score %in% c("111", "112", "121", "131, 141", "151", "132", "123","122", "212", "211", "115", "113", "114", "132", "213") ~ "High Value Customer",
+           RFM_score %in% c("135", "134", "143", "145","221", "222", "223", "232, 233", "251", "241","322", "231", "332") ~ "Loyal Customer",
+           RFM_score %in% c("152", "153", "224", "225", "234", "235", "242", "243", "252", "253", "244", "245", "254", "255", "215", "214", "144","311", "411", "313", "314", "315", "312", "321", "331", "324", "334", "343") ~ "Mid Value Customer",
+           RFM_score %in% c("434", "534", "535", "415", "414", "413", "424", "412", "422", "421","511", "512", "425", "513", "514", "515", "521", "522", "523", "524", "525", "353", "423", "432", "433", "355", "344", "345", "354", "355", "435", "444", "431") ~ "New Customer",
+           RFM_score %in% c("441", "442", "451", "452", "531","532", "533", "542", "541", "552","551", "553", "543", "445", "454", "545", "544", "554", "555") ~ "Churn Customer",
+           TRUE ~ "Can't lose" 
+         )) 
+saveRDS(df_rfm, "df_rfm")
+```
+##Visulization
+```{r}
+library(ggplot2)
+# Bar chart
+ggplot(df_rfm, aes(x = RFM_segment, fill = RFM_segment)) +
+  geom_bar() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(x = "segment", y = "No. of Customer", title = "customer Metrics Segment")
+
+```
+##category_of_products_mostly_purchased
+```{r}
+library(dplyr)
+library(ggplot2)
+
+category_of_products_mostly_purchased <- df_eu_storeData |>
+  group_by(Category) |>
+  summarise(total_quantity = sum(Quantity)) |>
+  arrange(desc(total_quantity)) |>
+  slice(1) |>
+  pull(Category)
+
+ggplot(df_eu_storeData, aes(x = Category, fill = Category)) +
+  geom_bar() +
+  xlab("Category of Products") +
+  ylab("Number of Customers") +
+  ggtitle("Most Purchased Category of Products") +
+  geom_text(stat='count', aes(label=after_stat(count)), vjust=-0.5, size=5) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+##highest_profit_category
+```{r}
+options(scipen = 999)
+highest_profit_category <- df_eu_storeData |>
+  group_by(Category) |>
+  summarise(total_profit = sum(Profit)) |>
+  arrange(desc(total_profit)) |>
+  slice(1)|> 
+  pull(Category)
+ggplot(df_eu_storeData, aes(x = Category, y = Profit, fill = Category)) +
+ geom_bar(stat = "identity") +
+  xlab("Category of Products") +
+  ylab("Profit") +
+  ggtitle("Highest Profit Category of Products") + 
+  theme(plot.title = element_text(hjust = 0.1))
+```
+##most_discounted_category
+```{r}
+library(scales)
+
+# calculate most discounted category
+most_discounted_category <- df_eu_storeData |>
+  filter(!is.na(Discount)) |>
+  group_by(Category) |>
+  summarise(Discount = mean(Discount)) |>
+  arrange(desc(Discount)) |>
+  slice(1) |>
+  pull(Category)
+# plot mean discount by category
+df_eu_storeData |>
+  filter(!is.na(Discount)) |>
+  group_by(Category) |>
+  summarise(mean_discount = mean(Discount)) |>
+  ggplot(aes(x = Category, y = mean_discount, fill = Category)) +
+  geom_bar(stat = "identity") +
+  scale_y_continuous(labels = percent_format()) +
+  labs(x = "Category", y = "Mean Discount", fill = "Category") +
+  ggtitle("Discount by Category") +
+  theme_minimal()
+
+```
+# Calculate most frequent customer segment
+```{r}
+most_frequent_segment <- df_eu_storeData |>
+  group_by(Segment) %>%
+  summarise(frequency = n_distinct(`Order ID`))
+  arrange(desc()) |>
+  slice(1) |>
+  pull(Segment)
+ggplot(df_eu_storeData, aes(x = segment, fill = Segment)) +
+  geom_bar() +
+  xlab("Customer Segment") +
+  ylab("Frequency") +
+  ggtitle("Most Frequent Customer Segment") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_text(stat = "count", aes(label = after_stat(count)), 
+            vjust = -0.5, size = 5) 
+```
+# Find the most preferred shipment mode
+```{r}
+df_most_preferred_shipment <- df_eu_storeData |>
+  group_by(`Ship Mode`) %>%
+  summarize(total_shipments = n_distinct(`Order ID`)) |>
+  arrange(desc(total_shipments))
+
+ggplot(df_most_preferred_shipment, aes(x = `Ship Mode`, fill = `Ship Mode`, y = total_shipments)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Ship Mode", y = "Total Shipments", 
+       title = "Most Preferred Shipment Mode") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_text(aes(label = total_shipments), 
+            vjust = -0.5, size = 3)
+
+```
